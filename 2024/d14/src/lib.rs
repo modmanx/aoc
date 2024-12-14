@@ -3,23 +3,12 @@ use std::{collections::HashMap, thread::sleep, time::Duration};
 use glam::IVec2;
 use miette::miette;
 use nom::{
-    branch::alt,
     bytes::complete::tag,
-    character::complete::{digit1, newline},
+    character::complete::newline,
     multi::separated_list0,
     sequence::{preceded, separated_pair},
     IResult,
 };
-
-use mathru::{
-    algebra::linear::{
-        matrix::{General, LUDec, LUDecomposition, Solve},
-        vector::Vector,
-    },
-    matrix, vector,
-};
-
-use itertools::Itertools;
 
 #[derive(Debug, Clone)]
 struct ParsedLine {
@@ -61,20 +50,20 @@ fn parse_input(i: &str) -> IResult<&str, Vec<ParsedLine>> {
     separated_list0(newline, parse_line)(i)
 }
 
-fn print_map(map_width: &i32, map_height: &i32, p: &Vec<ParsedLine>) {
-    for yy in 0..*map_height {
-        for xx in 0..*map_width {
-            let el =
-                p.iter().any(|pp| pp.position == IVec2::new(xx, yy));
-            if el {
-                print!("o")
-            } else {
-                print!(" ")
-            }
-        }
-        println!("");
-    }
-}
+// fn print_map(map_width: &i32, map_height: &i32, p: &Vec<ParsedLine>) {
+//     for yy in 0..*map_height {
+//         for xx in 0..*map_width {
+//             let el =
+//                 p.iter().any(|pp| pp.position == IVec2::new(xx, yy));
+//             if el {
+//                 print!("o")
+//             } else {
+//                 print!(" ")
+//             }
+//         }
+//         println!("");
+//     }
+// }
 
 pub fn solve_p1(contents: String) -> miette::Result<String> {
     let (_, mut p) = parse_input(&contents)
@@ -115,7 +104,7 @@ pub fn solve_p1(contents: String) -> miette::Result<String> {
 
     let map_quadrants = [
         map_quart,
-        map_quart.clone().map(|mut mq| {
+        map_quart.map(|mut mq| {
             mq += IVec2::new(map_width / 2 + 1, 0);
             mq
         }),
@@ -148,34 +137,17 @@ pub fn solve_p1(contents: String) -> miette::Result<String> {
         .collect();
 
     let mut res = r2[0];
-    for x in 1..r2.len() {
+    (1..r2.len()).for_each(|x| {
         res *= r2[x];
-    }
+    });
 
     Ok(format!("{}", res))
-}
-
-fn is_in_triangle(
-    pos: &IVec2,
-    map_width: &i32,
-    map_height: &i32,
-) -> bool {
-    let pos_y_ratio = (pos.y + 1) as f32 / *map_height as f32;
-    let pos_x_left = (*map_width as f32 / 2.)
-        - (pos_y_ratio * *map_width as f32) / 2.0;
-
-    let pos_x_right = (*map_width as f32 / 2.)
-        + (pos_y_ratio * *map_width as f32) / 2.0;
-
-    pos.x >= pos_x_left.round() as i32
-        && pos.x < pos_x_right.round() as i32
 }
 
 pub fn solve_p2(contents: String) -> miette::Result<String> {
     let (_, mut p) = parse_input(&contents)
         .map_err(|e| miette!("error parsing {}", e))?;
 
-    let secs = 100;
     let map_width = p.iter().map(|x| x.position.x).max().unwrap() + 1;
     let map_height =
         p.iter().map(|x| x.position.y).max().unwrap() + 1;
@@ -184,7 +156,7 @@ pub fn solve_p2(contents: String) -> miette::Result<String> {
 
     let mut max_row_store = 0i32;
     let mut max_col_store = 0i32;
-
+    let mut ok_step = 0i32;
     for step in 0..1000000 {
         let mut per_row = HashMap::new();
         let mut per_col = HashMap::new();
@@ -224,6 +196,7 @@ pub fn solve_p2(contents: String) -> miette::Result<String> {
         }
 
         if *max_row > 30 && *max_col > 30 {
+            ok_step = step + 1;
             println!(
                 "max row: {}  col: {}  step: {}",
                 max_row,
@@ -232,11 +205,9 @@ pub fn solve_p2(contents: String) -> miette::Result<String> {
             );
             break;
         }
-
-        // print_map(&map_width, &map_height, &p);
     }
 
-    Ok(format!("{}", 123123))
+    Ok(format!("{}", ok_step))
 }
 
 #[cfg(test)]
