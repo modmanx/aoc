@@ -1,0 +1,536 @@
+use std::{
+    collections::{HashMap, HashSet, VecDeque},
+    thread::{current, sleep},
+    time::Duration,
+};
+
+use glam::{ivec2, BVec2, IVec2};
+use itertools::enumerate;
+use miette::miette;
+use nom::{
+    branch::alt,
+    bytes::complete::tag,
+    character::complete::{anychar, satisfy},
+    multi::{many0, many1, separated_list0, separated_list1},
+    sequence::separated_pair,
+    IResult,
+};
+use nom_locate::{position, LocatedSpan};
+use petgraph::{
+    algo::{all_simple_paths, astar, dijkstra},
+    dot::{Config, Dot},
+    graph::{DiGraph, NodeIndex, UnGraph},
+    visit::EdgeRef,
+    Graph,
+};
+
+type Span<'a> = LocatedSpan<&'a str>;
+
+#[derive(Debug, PartialEq, Eq)]
+enum MapEntry {
+    Path(IVec2),
+    Start(IVec2),
+    Finish(IVec2),
+}
+
+fn parse_map(i: Span) -> IResult<Span, Option<MapEntry>> {
+    let (i, pos) = position(i)?;
+    let x = pos.get_column() as i32 - 1;
+    let y = pos.location_line() as i32 - 1;
+    let (i, c) = satisfy(|c| c != '\n')(i)?;
+    Ok((
+        i,
+        match c {
+            '.' => Some(MapEntry::Path(IVec2::new(x, y))),
+            'S' => Some(MapEntry::Start(IVec2::new(x, y))),
+            'E' => Some(MapEntry::Finish(IVec2::new(x, y))),
+            _ => None,
+        },
+    ))
+}
+
+fn parse_input(i: Span) -> IResult<Span, Vec<MapEntry>> {
+    let r = separated_list1(tag("\n"), many1(parse_map))(i)?;
+    Ok((r.0, r.1.into_iter().flatten().flatten().collect())) // second flatten removes None options
+}
+
+// fn print_map(m: &[MapEntry], robot_pos: &IVec2, w: &i32, h: &i32) {
+//     for yy in 0..*h {
+//         for xx in 0..*w {
+//         }
+//     }
+// }
+
+const DIRS: [IVec2; 4] =
+    [IVec2::Y, IVec2::NEG_Y, IVec2::X, IVec2::NEG_X];
+
+fn discover(
+    map: &Vec<IVec2>,
+    current: IVec2,
+    finish: IVec2,
+    current_dir: IVec2,
+    score: i32,
+    visited: &mut HashSet<IVec2>,
+    depth: i32,
+) -> i32 {
+    if current == finish {
+        return score;
+    }
+
+    if visited.contains(&current) {
+        return -1;
+    }
+
+    visited.insert(current);
+
+    let mut scores = vec![];
+    let best_next = IVec2::new(0, 0);
+    for d in DIRS {
+        let new_pos = current + d;
+        if !map.contains(&new_pos) {
+            continue;
+        }
+        let mut v = visited.clone();
+
+        let s = discover(
+            map,
+            new_pos,
+            finish,
+            d,
+            if d == current_dir {
+                score + 1
+            } else {
+                score + 1001
+            },
+            &mut v,
+            depth + 1,
+        );
+        if s > 0 {
+            scores.push(s);
+        }
+    }
+    if !scores.is_empty() {
+        *scores.iter().min().unwrap()
+    } else {
+        999999999
+    }
+}
+
+fn build_graph(
+    map: &Vec<IVec2>,
+    previous_pos: IVec2,
+    current_pos: IVec2,
+    visited: &mut Vec<(IVec2, IVec2, IVec2)>,
+    res: &mut Vec<(IVec2, IVec2, u32)>,
+) {
+    for d in DIRS {
+        let next = current_pos + d;
+
+        if !map.contains(&next) {
+            continue;
+        }
+        if previous_pos == next {
+            continue;
+        }
+
+        let d1 = current_pos - previous_pos;
+        let d2 = next - current_pos;
+        let score = if d1 == d2 { 1 } else { 1001 };
+
+        res.push((current_pos, next, score));
+
+        // println!(
+        //     "{} -> {} -> {}    {}",
+        //     previous_pos, current_pos, next, score
+        // );
+
+        if visited.contains(&(previous_pos, current_pos, next)) {
+        } else {
+            visited.push((previous_pos, current_pos, next));
+            build_graph(map, current_pos, next, visited, res);
+        }
+    }
+}
+
+fn build_graph_iter2(
+    map: &Vec<IVec2>,
+    previous_pos: IVec2,
+    init_pos: IVec2,
+    visited22: &mut Vec<(IVec2, IVec2, IVec2)>,
+    res: &mut Vec<(IVec2, IVec2, u32)>,
+) {
+    let mut to_visit: VecDeque<(IVec2, IVec2)> = VecDeque::new();
+    to_visit.push_back((init_pos, init_pos));
+    let mut visited: Vec<(IVec2, IVec2, IVec2)> = vec![];
+    while !to_visit.is_empty() {
+        let current = to_visit.pop_front().unwrap();
+
+        // if visited.contains(&current) {
+        //     continue;
+        // }
+
+        // println!("dequeued {:?}", current);
+
+        for d in DIRS {
+            let next = current.1 + d;
+
+            if !map.contains(&next) {
+                continue;
+            }
+            // if previous_pos == next {
+            //     continue;
+            // }
+
+            // visited.push(current);
+
+            let d1 = current.1 - current.0;
+            let d2 = next - current.1;
+            let score = if d1 == d2 { 2 } else { 1001 };
+
+            res.push((current.1, next, score));
+
+            // println!("{} -> {} -> {} ", current.0, current.1, next);
+
+            if !visited.contains(&(current.0, current.1, next)) {
+                // println!("  add {} to to_visit", next);
+                to_visit.push_back((current.1, next));
+                visited.push((current.0, current.1, next));
+            }
+
+            // if visited.contains(&(previous_pos, current_pos, next)) {
+            // } else {
+            //     visited.push((previous_pos, current_pos, next));
+            //     to_visit.push_back(next);
+            // }
+        }
+    }
+}
+
+fn build_graph_iter3(
+    map: &Vec<IVec2>,
+    previous_pos: IVec2,
+    init_pos: IVec2,
+    visited22: &mut Vec<(IVec2, IVec2, IVec2)>,
+    res: &mut HashSet<(IVec2, IVec2, u32)>,
+) {
+    let mut to_visit: VecDeque<(IVec2, IVec2)> = VecDeque::new(); //which, from where
+    to_visit.push_back((init_pos, init_pos - IVec2::X));
+    let mut visited: Vec<(IVec2, IVec2)> = vec![];
+    let mut no_conn: HashSet<(IVec2, IVec2)> = HashSet::new();
+    while !to_visit.is_empty() {
+        let current = to_visit.pop_front().unwrap();
+        println!("visiting {} from {}", current.0, current.1);
+
+        for d in DIRS {
+            let next = current.0 + d;
+
+            if !map.contains(&next) {
+                continue;
+            }
+
+            for d2 in DIRS {
+                let next2 = next + d2;
+                if next2 == current.0 {
+                    continue;
+                }
+                if !map.contains(&next2) {
+                    continue;
+                }
+                let diff0 = current.0 - current.1;
+                let diff1 = next - current.0;
+                let diff2 = next2 - next;
+
+                if diff0 == diff1 {
+                    res.insert((current.0, next, 1));
+                } else {
+                    res.insert((current.0, next, 1001));
+                }
+
+                if diff0 == diff2 {
+                    res.insert((current.0, next2, 1));
+                } else {
+                    res.insert((current.0, next2, 1001));
+                }
+
+                println!(
+                    "{} -> {} -> {}  {} {} {} ",
+                    current.0, next, next2, diff0, diff1, diff2
+                );
+            }
+        }
+    }
+}
+
+fn build_graph_iter(
+    map: &Vec<IVec2>,
+    previous_pos: IVec2,
+    init_pos: IVec2,
+    visited22: &mut Vec<(IVec2, IVec2, IVec2)>,
+    res: &mut HashSet<(IVec2, IVec2, u32)>,
+) {
+    // find all crosses
+
+    let cross_opt = [
+        [IVec2::X, IVec2::NEG_Y],
+        [IVec2::NEG_Y, IVec2::NEG_X],
+        [IVec2::NEG_X, IVec2::Y],
+        [IVec2::Y, IVec2::X],
+    ];
+
+    for me in map.iter() {
+        for co in cross_opt {
+            if map.contains(&(me + co[0]))
+                && map.contains(&(me + co[1]))
+            {
+                println!(
+                    "found cross at {:?}    {} {}",
+                    me,
+                    me + co[0],
+                    me + co[1]
+                );
+            }
+        }
+    }
+}
+
+pub fn solve_p1(contents: String) -> miette::Result<String> {
+    println!("start solve p1");
+    let contents_span = Span::new(&contents[..]);
+    let (_, map) = parse_input(contents_span)
+        .map_err(|e| miette!("could not parse, err: {}", e))?;
+
+    let start = match map
+        .iter()
+        .find(|x| matches!(x, MapEntry::Start(_)))
+        .unwrap()
+    {
+        MapEntry::Path(ivec2) => *ivec2,
+        MapEntry::Start(ivec2) => *ivec2,
+        MapEntry::Finish(ivec2) => *ivec2,
+    };
+
+    let finish = match map
+        .iter()
+        .find(|x| matches!(x, MapEntry::Finish(_)))
+        .unwrap()
+    {
+        MapEntry::Path(ivec2) => *ivec2,
+        MapEntry::Start(ivec2) => *ivec2,
+        MapEntry::Finish(ivec2) => *ivec2,
+    };
+
+    let map2: Vec<IVec2> = map
+        .iter()
+        .map(|x| match x {
+            MapEntry::Path(ivec2) => ivec2.clone(),
+            MapEntry::Start(ivec2) => ivec2.clone(),
+            MapEntry::Finish(ivec2) => ivec2.clone(),
+        })
+        .collect::<Vec<IVec2>>();
+
+    let mut res = HashSet::new();
+    let mut visited = vec![];
+
+    println!("build graph");
+
+    build_graph_iter(&map2, start, start, &mut visited, &mut res);
+
+    // dbg!(&res);
+
+    println!("...");
+    let mut nodes: HashMap<NodeIndex, IVec2> = HashMap::new();
+    let mut graph = UnGraph::<IVec2, i32>::new_undirected();
+    let mut ivec2_to_node: HashMap<IVec2, usize> = HashMap::new();
+    let mut node_to_ivec2: HashMap<usize, IVec2> = HashMap::new();
+    for mapnode in map2 {
+        if res
+            .iter()
+            .filter(|(x1, x2, _)| *x1 == mapnode || *x2 == mapnode)
+            .count()
+            == 0
+        {
+            continue;
+        }
+        let ni = graph.add_node(mapnode);
+        ivec2_to_node.insert(mapnode, ni.index());
+        node_to_ivec2.insert(ni.index(), mapnode);
+    }
+
+    for current_node_idx in graph.node_indices() {
+        let current_node_data =
+            graph.node_weight(current_node_idx).unwrap();
+
+        let connections: Vec<(IVec2, IVec2, u32)> = res
+            .iter()
+            .filter(|x| x.0 == *current_node_data)
+            .map(|x| (x.0, x.1, x.2))
+            .collect();
+
+        // println!(
+        //     "{} is connected to {:?}",
+        //     current_node_data, connections
+        // );
+
+        for c in connections {
+            // find node with this index
+            if let Some(ni) = ivec2_to_node.get(&c.1) {
+                println!("add edge");
+                graph.add_edge(
+                    current_node_idx,
+                    NodeIndex::new(*ni),
+                    c.2 as i32,
+                );
+                // if !graph.contains_edge(
+                //     current_node_idx,
+                //     NodeIndex::new(*ni),
+                // ) && !graph.contains_edge(
+                //     NodeIndex::new(*ni),
+                //     current_node_idx,
+                // ) {
+                // }
+            }
+        }
+    }
+
+    let start_node_idx =
+        *ivec2_to_node.iter().find(|x| x.0 == &start).unwrap().1;
+
+    let finish_node_idx =
+        *ivec2_to_node.iter().find(|x| x.0 == &finish).unwrap().1;
+
+    println!("{:?}", Dot::with_config(&graph, &[]));
+
+    // let path = astar(
+    //     &graph,
+    //     NodeIndex::new(start_node_idx),
+    //     |finish| finish == NodeIndex::new(finish_node_idx),
+    //     |e| *e.weight(),
+    //     |ne| 0,
+    // )
+    // .unwrap();
+
+    let path = dijkstra(
+        &graph,
+        NodeIndex::new(start_node_idx),
+        Some(NodeIndex::new(finish_node_idx)),
+        |x| *x.weight(),
+    );
+
+    let mut curr_pos = start;
+    let mut prev_dir = IVec2::X;
+    let mut score = 0i32;
+    for (node, _) in path {
+        let xy = node_to_ivec2.get(&node.index()).unwrap();
+
+        let this_dir = xy - curr_pos;
+        if curr_pos - xy == IVec2::new(0, 0) {
+            continue;
+        }
+        if this_dir.x.abs() > 0 && this_dir.y.abs() > 0 {
+            score += 1001;
+        } else {
+            score += 1;
+        }
+        println!(
+            "{} -> {}   {}   score {}",
+            curr_pos,
+            xy,
+            curr_pos - xy,
+            score
+        );
+
+        curr_pos = *xy;
+        prev_dir = this_dir;
+    }
+    println!("score: {}", score);
+    Ok(format!("{}", score))
+}
+
+pub fn solve_p2(contents: String) -> miette::Result<String> {
+    Ok(format!("{}", 1))
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{solve_p1, solve_p2};
+
+    #[test]
+    fn p1_1() -> miette::Result<()> {
+        let s = solve_p1(String::from(
+            "###############
+#.......#....E#
+#.#.###.#.###.#
+#.....#.#...#.#
+#.###.#####.#.#
+#.#.#.......#.#
+#.#.#####.###.#
+#...........#.#
+###.#.#####.#.#
+#...#.....#.#.#
+#.#.#.###.#.#.#
+#.....#...#.#.#
+#.###.#.#.#.#.#
+#S..#.....#...#
+###############",
+        ));
+
+        assert_eq!("7036", s?);
+        Ok(())
+    }
+    #[test]
+    fn p1_2() -> miette::Result<()> {
+        let s = solve_p1(String::from(
+            "#################
+#...#...#...#..E#
+#.#.#.#.#.#.#.#.#
+#.#.#.#...#...#.#
+#.#.#.#.###.#.#.#
+#...#.#.#.....#.#
+#.#.#.#.#.#####.#
+#.#...#.#.#.....#
+#.#.#####.#.###.#
+#.#.#.......#...#
+#.#.###.#####.###
+#.#.#...#.....#.#
+#.#.#.#####.###.#
+#.#.#.........#.#
+#.#.#.#########.#
+#S#.............#
+#################",
+        ));
+
+        assert_eq!("11048", s?);
+        Ok(())
+    }
+
+    #[test]
+    fn p1_3() -> miette::Result<()> {
+        let s = solve_p1(String::from(
+            "#####
+#..E#
+#.#.#
+#...#
+#.###
+#S..#
+#####",
+        ));
+
+        assert_eq!("11048", s?);
+        Ok(())
+    }
+    #[test]
+    fn p1_4() -> miette::Result<()> {
+        let s = solve_p1(String::from(
+            "#######
+#.....#
+#.#.#.#
+#.....#
+#.#.#.#
+#S..#E#
+#######",
+        ));
+
+        assert_eq!("11048", s?);
+        Ok(())
+    }
+}
