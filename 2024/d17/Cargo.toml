@@ -1,0 +1,10 @@
+[package]
+name = "d17"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+glam = "0.29.2"
+itertools = "0.13.0"
+miette = "7.4.0"
+nom = "7.1.3"
